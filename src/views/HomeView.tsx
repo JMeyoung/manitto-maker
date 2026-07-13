@@ -2,11 +2,11 @@ import React, { useState } from 'react';
 import { PlusCircle, Search, Users, Database, ShieldAlert, Award } from 'lucide-react';
 import { checkGroupDuplicate, createGroup, findGroupForAdmin } from '../services/groupService';
 import { generateAdminPassword } from '../utils/matching';
-import { isFirebaseConfigured } from '../firebase';
+import { isSupabaseConfigured } from '../supabase';
 
 interface HomeViewProps {
   onNavigate: (view: string, groupId: string) => void;
-  showToast: (message: string, type?: 'success' | 'error' | 'warning') => void;
+  showToast: (message: string, type?: 'success' | 'error' | 'warning' | 'info') => void;
 }
 
 export default function HomeView({ onNavigate, showToast }: HomeViewProps) {
@@ -80,10 +80,10 @@ export default function HomeView({ onNavigate, showToast }: HomeViewProps) {
     <div className="max-w-md w-full mx-auto px-4 py-8 animate-fade-up">
       {/* DB Connection Badge */}
       <div className="flex justify-center mb-6">
-        {isFirebaseConfigured ? (
+        {isSupabaseConfigured ? (
           <div className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
             <Database className="w-3.5 h-3.5" />
-            <span>실시간 Firebase 클라우드 연결됨</span>
+            <span>실시간 Supabase 클라우드 연결됨</span>
           </div>
         ) : (
           <div className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">

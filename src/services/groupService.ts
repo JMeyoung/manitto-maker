@@ -1,14 +1,4 @@
-import {
-  collection,
-  doc,
-  getDoc,
-  addDoc,
-  updateDoc,
-  getDocs,
-  query,
-  where,
-} from 'firebase/firestore';
-import { db, isFirebaseConfigured } from '../firebase';
+import { supabase, isSupabaseConfigured } from '../supabase';
 import type { Match } from '../utils/matching';
 
 export interface GroupData {
@@ -16,7 +6,7 @@ export interface GroupData {
   groupName: string;
   leaderName: string;
   password: string; // Admin password (e.g. "행복한 사자")
-  createdAt: any;
+  createdAt: Date;
   isMatched: boolean;
   names: string[];
   matches: Match[];
@@ -49,17 +39,18 @@ export async function checkGroupDuplicate(
   const trimmedGroup = groupName.trim();
   const trimmedLeader = leaderName.trim();
 
-  if (isFirebaseConfigured && db) {
+  if (isSupabaseConfigured && supabase) {
     try {
-      const q = query(
-        collection(db, 'groups'),
-        where('groupName', '==', trimmedGroup),
-        where('leaderName', '==', trimmedLeader)
-      );
-      const querySnapshot = await getDocs(q);
-      return !querySnapshot.empty;
+      const { data, error } = await supabase
+        .from('manitto_groups')
+        .select('id')
+        .eq('group_name', trimmedGroup)
+        .eq('leader_name', trimmedLeader);
+
+      if (error) throw error;
+      return data && data.length > 0;
     } catch (error) {
-      console.error('Firestore checkGroupDuplicate error:', error);
+      console.error('Supabase checkGroupDuplicate error:', error);
       // Fallback to local check if db errors out
     }
   }
@@ -84,22 +75,27 @@ export async function createGroup(
   const trimmedGroup = groupName.trim();
   const trimmedLeader = leaderName.trim();
 
-  const newGroupPayload = {
-    groupName: trimmedGroup,
-    leaderName: trimmedLeader,
-    password,
-    createdAt: new Date(),
-    isMatched: false,
-    names: [],
-    matches: [],
-  };
-
-  if (isFirebaseConfigured && db) {
+  if (isSupabaseConfigured && supabase) {
     try {
-      const docRef = await addDoc(collection(db, 'groups'), newGroupPayload);
-      return docRef.id;
+      const { data, error } = await supabase
+        .from('manitto_groups')
+        .insert([
+          {
+            group_name: trimmedGroup,
+            leader_name: trimmedLeader,
+            password,
+            is_matched: false,
+            names: [],
+            matches: [],
+          },
+        ])
+        .select()
+        .single();
+
+      if (error) throw error;
+      if (data) return data.id;
     } catch (error) {
-      console.error('Firestore createGroup error, falling back to LocalStorage:', error);
+      console.error('Supabase createGroup error, falling back to LocalStorage:', error);
     }
   }
 
@@ -108,7 +104,13 @@ export async function createGroup(
   const generatedId = Math.random().toString(36).substring(2, 11); // Random alphanumeric ID
   const localGroup: GroupData = {
     id: generatedId,
-    ...newGroupPayload,
+    groupName: trimmedGroup,
+    leaderName: trimmedLeader,
+    password,
+    createdAt: new Date(),
+    isMatched: false,
+    names: [],
+    matches: [],
   };
   localGroups.push(localGroup);
   saveLocalGroups(localGroups);
@@ -119,32 +121,33 @@ export async function createGroup(
  * Fetches a group by ID.
  */
 export async function getGroup(groupId: string): Promise<GroupData | null> {
-  if (isFirebaseConfigured && db) {
+  if (isSupabaseConfigured && supabase) {
     try {
-      const docRef = doc(db, 'groups', groupId);
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        // Convert Firestore Timestamp to Date object if needed
-        let createdAtDate = new Date();
-        if (data.createdAt && typeof data.createdAt.toDate === 'function') {
-          createdAtDate = data.createdAt.toDate();
-        } else if (data.createdAt) {
-          createdAtDate = new Date(data.createdAt);
+      // Validate that groupId is a valid UUID before sending query to PostgreSQL
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (uuidRegex.test(groupId)) {
+        const { data, error } = await supabase
+          .from('manitto_groups')
+          .select('*')
+          .eq('id', groupId)
+          .single();
+
+        if (error) throw error;
+        if (data) {
+          return {
+            id: data.id,
+            groupName: data.group_name,
+            leaderName: data.leader_name,
+            password: data.password,
+            createdAt: new Date(data.created_at),
+            isMatched: data.is_matched || false,
+            names: data.names || [],
+            matches: data.matches || [],
+          };
         }
-        return {
-          id: docSnap.id,
-          groupName: data.groupName,
-          leaderName: data.leaderName,
-          password: data.password,
-          createdAt: createdAtDate,
-          isMatched: data.isMatched || false,
-          names: data.names || [],
-          matches: data.matches || [],
-        };
       }
     } catch (error) {
-      console.error('Firestore getGroup error, checking LocalStorage:', error);
+      console.error('Supabase getGroup error, checking LocalStorage:', error);
     }
   }
 
@@ -163,13 +166,17 @@ export async function updateGroupNames(
 ): Promise<void> {
   const cleanNames = names.map((n) => n.trim()).filter(Boolean);
 
-  if (isFirebaseConfigured && db) {
+  if (isSupabaseConfigured && supabase) {
     try {
-      const docRef = doc(db, 'groups', groupId);
-      await updateDoc(docRef, { names: cleanNames });
+      const { error } = await supabase
+        .from('manitto_groups')
+        .update({ names: cleanNames })
+        .eq('id', groupId);
+
+      if (error) throw error;
       return;
     } catch (error) {
-      console.error('Firestore updateGroupNames error, writing to LocalStorage:', error);
+      console.error('Supabase updateGroupNames error, writing to LocalStorage:', error);
     }
   }
 
@@ -189,16 +196,20 @@ export async function saveGroupMatches(
   groupId: string,
   matches: Match[]
 ): Promise<void> {
-  if (isFirebaseConfigured && db) {
+  if (isSupabaseConfigured && supabase) {
     try {
-      const docRef = doc(db, 'groups', groupId);
-      await updateDoc(docRef, {
-        matches,
-        isMatched: true,
-      });
+      const { error } = await supabase
+        .from('manitto_groups')
+        .update({
+          matches,
+          is_matched: true,
+        })
+        .eq('id', groupId);
+
+      if (error) throw error;
       return;
     } catch (error) {
-      console.error('Firestore saveGroupMatches error, writing to LocalStorage:', error);
+      console.error('Supabase saveGroupMatches error, writing to LocalStorage:', error);
     }
   }
 
@@ -224,35 +235,31 @@ export async function findGroupForAdmin(
   const trimmedLeader = leaderName.trim();
   const trimmedPassword = adminPassword.trim();
 
-  if (isFirebaseConfigured && db) {
+  if (isSupabaseConfigured && supabase) {
     try {
-      const q = query(
-        collection(db, 'groups'),
-        where('groupName', '==', trimmedGroup),
-        where('leaderName', '==', trimmedLeader),
-        where('password', '==', trimmedPassword)
-      );
-      const querySnapshot = await getDocs(q);
-      if (!querySnapshot.empty) {
-        const docSnap = querySnapshot.docs[0];
-        const data = docSnap.data();
-        let createdAtDate = new Date();
-        if (data.createdAt && typeof data.createdAt.toDate === 'function') {
-          createdAtDate = data.createdAt.toDate();
-        }
+      const { data, error } = await supabase
+        .from('manitto_groups')
+        .select('*')
+        .eq('group_name', trimmedGroup)
+        .eq('leader_name', trimmedLeader)
+        .eq('password', trimmedPassword)
+        .maybeSingle();
+
+      if (error) throw error;
+      if (data) {
         return {
-          id: docSnap.id,
-          groupName: data.groupName,
-          leaderName: data.leaderName,
+          id: data.id,
+          groupName: data.group_name,
+          leaderName: data.leader_name,
           password: data.password,
-          createdAt: createdAtDate,
-          isMatched: data.isMatched || false,
+          createdAt: new Date(data.created_at),
+          isMatched: data.is_matched || false,
           names: data.names || [],
           matches: data.matches || [],
         };
       }
     } catch (error) {
-      console.error('Firestore findGroupForAdmin error:', error);
+      console.error('Supabase findGroupForAdmin error:', error);
     }
   }
 
